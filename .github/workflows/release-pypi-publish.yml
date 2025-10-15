@@ -1,0 +1,111 @@
+name: PyPI Publish (Release)
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+jobs:
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Poetry
+        run: |
+          pipx install poetry
+
+      - name: Validate release tag and project version
+        run: |
+          TAG="${{ github.ref_name }}"
+
+          echo "Validating tag format: $TAG"
+          if [[ ! $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag '$TAG' does not match release pattern vX.Y.Z"
+            exit 1
+          fi
+
+          TAG_VERSION="${TAG#v}"
+          PROJECT_VERSION="$(poetry version -s)"
+
+          echo "Validating tag '$TAG' version '$TAG_VERSION' against project version '$PROJECT_VERSION'"
+          if [ "$TAG_VERSION" != "$PROJECT_VERSION" ]; then
+            echo "Tag version '$TAG_VERSION' does not match project version '${PROJECT_VERSION}'"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: |
+          poetry install --no-interaction --with dev --with notebooks
+
+      # Notebooks tests expect a kernel named 'env' to exist
+      - name: Register Jupyter kernel 'env'
+        run: |
+          poetry run ipython kernel install --user --env VIRTUAL_ENV "$(pwd)/.venv" --name=env
+
+      - name: Run tests
+        run: |
+          poetry run pytest -q
+
+  build:
+    name: Build
+    needs: test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - name: Build
+        run: poetry build
+
+      # Upload the artifact for the publish job
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          path: dist/
+          name: dist.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+    permissions:
+      contents: read
+      # Required to write the publishing token
+      id-token: write
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: dist.zip
+          path: dist/
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          print-hash: true
+          attestations: false
