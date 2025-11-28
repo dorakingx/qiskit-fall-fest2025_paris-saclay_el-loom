@@ -41,9 +41,92 @@ from loom.eka.operations.code_operation import (
     MeasureLogicalX,
 )
 from loom.executor.eka_circuit_to_stim_converter import EkaCircuitToStimConverter
+from loom.eka.utilities.pauli_binary_vector_rep import pauliops_anti_commute, SignedPauliOp
 import numpy as np
 
 from loom_color_code_832.code_factory import ColorCode832
+
+
+def verify_logical_operators(block: ColorCode832):
+    """
+    Pre-check function to verify that logical operators satisfy the correct
+    commutation relations before running simulations.
+    
+    Checks:
+    1. X_L^(i) and Z_L^(j) anti-commute if and only if i == j
+    2. All logical operators commute with all stabilizers
+    
+    Parameters
+    ----------
+    block : ColorCode832
+        The ColorCode832 block to verify
+        
+    Raises
+    ------
+    AssertionError
+        If any of the commutation checks fail
+    """
+    print("\n" + "-" * 70)
+    print("Pre-check: Verifying Logical Operators")
+    print("-" * 70)
+    
+    # Collect all data qubits for conversion
+    all_data_qubits = tuple(sorted(set(q for stab in block.stabilizers for q in stab.data_qubits)))
+    
+    # Convert logical operators to SignedPauliOp for commutation checks
+    x_log_ops = [
+        log_x.as_signed_pauli_op(all_data_qubits)
+        for log_x in block.logical_x_operators
+    ]
+    z_log_ops = [
+        log_z.as_signed_pauli_op(all_data_qubits)
+        for log_z in block.logical_z_operators
+    ]
+    
+    # Convert stabilizers to SignedPauliOp
+    stab_ops = [
+        stab.as_signed_pauli_op(all_data_qubits)
+        for stab in block.stabilizers
+    ]
+    
+    # Check 1: X_L^(i) and Z_L^(j) anti-commute if and only if i == j
+    print("Checking logical operator anti-commutation relations...")
+    for i, x_op in enumerate(x_log_ops):
+        for j, z_op in enumerate(z_log_ops):
+            anti_commutes = pauliops_anti_commute(x_op, z_op)
+            if i == j:
+                assert anti_commutes, (
+                    f"Logical X operator {i} and Logical Z operator {j} "
+                    f"should anti-commute (i == j), but they commute."
+                )
+            else:
+                assert not anti_commutes, (
+                    f"Logical X operator {i} and Logical Z operator {j} "
+                    f"should commute (i != j), but they anti-commute."
+                )
+    print("✓ All logical X and Z operators have correct anti-commutation relations")
+    
+    # Check 2: All logical operators commute with all stabilizers
+    print("Checking that logical operators commute with stabilizers...")
+    for i, x_op in enumerate(x_log_ops):
+        for j, stab_op in enumerate(stab_ops):
+            anti_commutes = pauliops_anti_commute(x_op, stab_op)
+            assert not anti_commutes, (
+                f"Logical X operator {i} should commute with stabilizer {j}, "
+                f"but they anti-commute."
+            )
+    
+    for i, z_op in enumerate(z_log_ops):
+        for j, stab_op in enumerate(stab_ops):
+            anti_commutes = pauliops_anti_commute(z_op, stab_op)
+            assert not anti_commutes, (
+                f"Logical Z operator {i} should commute with stabilizer {j}, "
+                f"but they anti-commute."
+            )
+    print("✓ All logical operators commute with all stabilizers")
+    
+    print("✓ All pre-checks passed! The code structure is mathematically valid.")
+    print("-" * 70)
 
 
 def execute_and_get_logical_result(final_step, logical_qubit_idx=0, seed=42, shots=1):
@@ -97,6 +180,9 @@ def run_memory_experiment():
     print(f"Number of physical qubits: {len(physical_qubits)}")
     print(f"Number of logical qubits: {len(block.logical_x_operators)}")
     print(f"Number of stabilizers: {len(block.stabilizers)}")
+    
+    # Pre-check: Verify logical operators before running experiments
+    verify_logical_operators(block)
     
     # Test 1: Initialize in logical |0⟩⊗3 and measure in Z basis
     print("\n" + "-" * 70)

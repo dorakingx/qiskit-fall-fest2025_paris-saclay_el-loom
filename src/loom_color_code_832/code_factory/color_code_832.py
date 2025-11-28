@@ -20,6 +20,7 @@ from __future__ import annotations
 from functools import cached_property
 from uuid import uuid4
 from pydantic.dataclasses import dataclass
+import numpy as np
 
 from loom.eka import (
     Block,
@@ -32,6 +33,8 @@ from loom.eka import (
     Channel,
 )
 from loom.eka.utilities import dataclass_params
+from loom.eka.utilities.stab_array import StabArray
+from loom.eka.utilities.logical_operator_finding import find_logical_operator_set
 
 
 @dataclass(**dataclass_params)
@@ -97,12 +100,10 @@ class ColorCode832(Block):
         if unique_label is None:
             unique_label = str(uuid4())
 
-        # Define the 8 physical qubits arranged in a cube structure
-        # We'll place them in a 2D grid: 4 qubits in first row, 4 in second row
-        # Qubit positions: (x, y, 0) where x,y are grid positions
+        # Define the 8 physical qubits arranged in a 2D grid: 2 rows x 4 columns
         # Layout:
-        #  0  1  2  3  (first row)
-        #  4  5  6  7  (second row)
+        #  (0,0)  (1,0)  (2,0)  (3,0)  (row 0)
+        #  (0,1)  (1,1)  (2,1)  (3,1)  (row 1)
         
         # Define stabilizer supports based on cube faces
         # For the [8,3,2] code, we have 5 stabilizers:
@@ -110,27 +111,28 @@ class ColorCode832(Block):
         
         # X stabilizers (3 faces of the cube)
         x_stabilizer_supports = [
-            # Face 1: qubits 0, 1, 2, 3 (top face)
-            [(0, 0, 0), (1, 0, 0), (2, 0, 0), (3, 0, 0)],
-            # Face 2: qubits 0, 1, 4, 5 (front-left face)
-            [(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0)],
-            # Face 3: qubits 2, 3, 6, 7 (back-right face)
-            [(2, 0, 0), (3, 0, 0), (2, 1, 0), (3, 1, 0)],
+            # Face 1: qubits (0,0), (1,0), (2,0), (3,0) (top face)
+            [(0, 0), (1, 0), (2, 0), (3, 0)],
+            # Face 2: qubits (0,0), (1,0), (0,1), (1,1) (front-left face)
+            [(0, 0), (1, 0), (0, 1), (1, 1)],
+            # Face 3: qubits (2,0), (3,0), (2,1), (3,1) (back-right face)
+            [(2, 0), (3, 0), (2, 1), (3, 1)],
         ]
         
         # Z stabilizers (2 faces of the cube)
         z_stabilizer_supports = [
-            # Face 4: qubits 0, 2, 4, 6 (left face)
-            [(0, 0, 0), (2, 0, 0), (0, 1, 0), (2, 1, 0)],
-            # Face 5: qubits 1, 3, 5, 7 (right face)
-            [(1, 0, 0), (3, 0, 0), (1, 1, 0), (3, 1, 0)],
+            # Face 4: qubits (0,0), (2,0), (0,1), (2,1) (left face)
+            [(0, 0), (2, 0), (0, 1), (2, 1)],
+            # Face 5: qubits (1,0), (3,0), (1,1), (3,1) (right face)
+            [(1, 0), (3, 0), (1, 1), (3, 1)],
         ]
 
+        # Ancilla qubits placed in row 2 (y=2) to avoid overlap with data qubits
         x_stabilizers = [
             Stabilizer(
                 pauli="X" * 4,
                 data_qubits=supp,
-                ancilla_qubits=[(i, 0, 1)]
+                ancilla_qubits=[(i, 2)]
             )
             for i, supp in enumerate(x_stabilizer_supports)
         ]
@@ -139,52 +141,45 @@ class ColorCode832(Block):
             Stabilizer(
                 pauli="Z" * 4,
                 data_qubits=supp,
-                ancilla_qubits=[(i + 3, 0, 1)]
+                ancilla_qubits=[(i + 3, 2)]
             )
             for i, supp in enumerate(z_stabilizer_supports)
         ]
 
         stabilizers = x_stabilizers + z_stabilizers
 
-        # Define the logical operators for 3 logical qubits
-        # Logical operators must commute with all stabilizers
+        # Automatically derive logical operators from stabilizers
+        # Collect all data qubits
+        all_data_qubits = tuple(
+            sorted(set(q for stab in stabilizers for q in stab.data_qubits))
+        )
         
-        # Logical X operators (3 logical qubits)
+        # Create coordinate-to-index mapping
+        qubit_to_index = {qubit: i for i, qubit in enumerate(all_data_qubits)}
+        index_to_qubit = {i: qubit for qubit, i in qubit_to_index.items()}
+        
+        # Convert stabilizers to SignedPauliOp and create StabArray
+        signed_pauli_ops = [
+            stab.as_signed_pauli_op(all_data_qubits) for stab in stabilizers
+        ]
+        stabarray = StabArray.from_signed_pauli_ops(signed_pauli_ops, validated=False)
+        
+        # Find logical operators automatically
+        x_log_stabarray, z_log_stabarray = find_logical_operator_set(stabarray)
+        
+        # Convert logical operators from StabArray back to PauliOperator objects
         logical_x_operators = [
-            # Logical X1: X on qubits 0, 4
-            PauliOperator(
-                pauli="XX",
-                data_qubits=[(0, 0, 0), (0, 1, 0)],
-            ),
-            # Logical X2: X on qubits 1, 5
-            PauliOperator(
-                pauli="XX",
-                data_qubits=[(1, 0, 0), (1, 1, 0)],
-            ),
-            # Logical X3: X on qubits 2, 6
-            PauliOperator(
-                pauli="XX",
-                data_qubits=[(2, 0, 0), (2, 1, 0)],
-            ),
+            PauliOperator.from_signed_pauli_op(
+                x_log_stabarray[i], index_to_qubit
+            )
+            for i in range(x_log_stabarray.nstabs)
         ]
         
-        # Logical Z operators (3 logical qubits)
         logical_z_operators = [
-            # Logical Z1: Z on qubits 0, 1
-            PauliOperator(
-                pauli="ZZ",
-                data_qubits=[(0, 0, 0), (1, 0, 0)],
-            ),
-            # Logical Z2: Z on qubits 2, 3
-            PauliOperator(
-                pauli="ZZ",
-                data_qubits=[(2, 0, 0), (3, 0, 0)],
-            ),
-            # Logical Z3: Z on qubits 4, 5
-            PauliOperator(
-                pauli="ZZ",
-                data_qubits=[(0, 1, 0), (1, 1, 0)],
-            ),
+            PauliOperator.from_signed_pauli_op(
+                z_log_stabarray[i], index_to_qubit
+            )
+            for i in range(z_log_stabarray.nstabs)
         ]
 
         # Define the syndrome extraction circuits
