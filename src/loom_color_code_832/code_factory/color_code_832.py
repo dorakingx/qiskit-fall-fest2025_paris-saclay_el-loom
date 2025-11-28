@@ -101,9 +101,11 @@ class ColorCode832(Block):
             unique_label = str(uuid4())
 
         # Define the 8 physical qubits arranged in a 2D grid: 2 rows x 4 columns
+        # All coordinates are 2D tuples (x, y) compatible with SQUARE_2D lattice type.
         # Layout:
-        #  (0,0)  (1,0)  (2,0)  (3,0)  (row 0)
-        #  (0,1)  (1,1)  (2,1)  (3,1)  (row 1)
+        #  (0,0)  (1,0)  (2,0)  (3,0)  (row 0, y=0)
+        #  (0,1)  (1,1)  (2,1)  (3,1)  (row 1, y=1)
+        # Ancilla qubits are placed in row 2 (y=2) to avoid overlap with data qubits.
         
         # Define stabilizer supports based on cube faces
         # For the [8,3,2] code, we have 5 stabilizers:
@@ -148,26 +150,41 @@ class ColorCode832(Block):
 
         stabilizers = x_stabilizers + z_stabilizers
 
-        # Automatically derive logical operators from stabilizers
-        # Collect all data qubits
+        # Automatically derive logical operators from stabilizers using the
+        # standard algorithm from Nielsen & Chuang (2011, p.470-471).
+        # This ensures the logical operators satisfy canonical commutation relations:
+        # - X_L^(i) and Z_L^(j) anti-commute if and only if i == j
+        # - All logical operators commute with all stabilizers
+        # - X_L operators commute with each other; Z_L operators commute with each other
+        
+        # Step 1: Collect all data qubits and create coordinate-to-index mapping
+        # This mapping is needed to convert between coordinate-based representation
+        # (used by Stabilizer/PauliOperator) and index-based representation
+        # (used by StabArray/SignedPauliOp)
         all_data_qubits = tuple(
             sorted(set(q for stab in stabilizers for q in stab.data_qubits))
         )
-        
-        # Create coordinate-to-index mapping
         qubit_to_index = {qubit: i for i, qubit in enumerate(all_data_qubits)}
         index_to_qubit = {i: qubit for qubit, i in qubit_to_index.items()}
         
-        # Convert stabilizers to SignedPauliOp and create StabArray
+        # Step 2: Convert stabilizers to SignedPauliOp format and create StabArray
+        # The StabArray contains all stabilizer information in a format suitable
+        # for the logical operator finding algorithm. For CSS codes like the [8,3,2]
+        # color code, the StabArray internally handles the X and Z components separately.
         signed_pauli_ops = [
             stab.as_signed_pauli_op(all_data_qubits) for stab in stabilizers
         ]
         stabarray = StabArray.from_signed_pauli_ops(signed_pauli_ops, validated=False)
         
-        # Find logical operators automatically
+        # Step 3: Find logical operators automatically using the standard form algorithm
+        # This function puts the stabilizer array into standard form and derives
+        # the logical X and Z operators that satisfy canonical commutation relations.
+        # The algorithm ensures mathematical correctness of the logical operators.
         x_log_stabarray, z_log_stabarray = find_logical_operator_set(stabarray)
         
-        # Convert logical operators from StabArray back to PauliOperator objects
+        # Step 4: Convert logical operators from StabArray back to PauliOperator objects
+        # Map the index-based representation back to coordinate-based representation
+        # for use in the Block structure.
         logical_x_operators = [
             PauliOperator.from_signed_pauli_op(
                 x_log_stabarray[i], index_to_qubit

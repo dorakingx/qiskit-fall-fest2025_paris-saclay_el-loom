@@ -47,19 +47,23 @@ import numpy as np
 from loom_color_code_832.code_factory import ColorCode832
 
 
-def verify_logical_operators(block: ColorCode832):
+def validate_operators(block: ColorCode832):
     """
-    Pre-check function to verify that logical operators satisfy the correct
+    Comprehensive validation function to verify that all operators satisfy the correct
     commutation relations before running simulations.
     
     Checks:
-    1. X_L^(i) and Z_L^(j) anti-commute if and only if i == j
-    2. All logical operators commute with all stabilizers
+    1. Stabilizer Commutation: All stabilizers commute with each other
+    2. Logical-Stabilizer Commutation: All logical operators commute with all stabilizers
+    3. Logical-Logical Commutation:
+       - X_L^(i) and Z_L^(j) anti-commute if and only if i == j
+       - X_L operators commute with each other
+       - Z_L operators commute with each other
     
     Parameters
     ----------
     block : ColorCode832
-        The ColorCode832 block to verify
+        The ColorCode832 block to validate
         
     Raises
     ------
@@ -67,7 +71,7 @@ def verify_logical_operators(block: ColorCode832):
         If any of the commutation checks fail
     """
     print("\n" + "-" * 70)
-    print("Pre-check: Verifying Logical Operators")
+    print("Validation: Verifying Operator Commutation Relations")
     print("-" * 70)
     
     # Collect all data qubits for conversion
@@ -89,25 +93,20 @@ def verify_logical_operators(block: ColorCode832):
         for stab in block.stabilizers
     ]
     
-    # Check 1: X_L^(i) and Z_L^(j) anti-commute if and only if i == j
-    print("Checking logical operator anti-commutation relations...")
-    for i, x_op in enumerate(x_log_ops):
-        for j, z_op in enumerate(z_log_ops):
-            anti_commutes = pauliops_anti_commute(x_op, z_op)
-            if i == j:
-                assert anti_commutes, (
-                    f"Logical X operator {i} and Logical Z operator {j} "
-                    f"should anti-commute (i == j), but they commute."
-                )
-            else:
+    # Check 1: Stabilizer Commutation - All stabilizers must commute with each other
+    print("Checking stabilizer-stabilizer commutation...")
+    for i, stab1 in enumerate(stab_ops):
+        for j, stab2 in enumerate(stab_ops):
+            if i < j:  # Only check each pair once
+                anti_commutes = pauliops_anti_commute(stab1, stab2)
                 assert not anti_commutes, (
-                    f"Logical X operator {i} and Logical Z operator {j} "
-                    f"should commute (i != j), but they anti-commute."
+                    f"Stabilizer {i} and Stabilizer {j} should commute, "
+                    f"but they anti-commute."
                 )
-    print("✓ All logical X and Z operators have correct anti-commutation relations")
+    print("✓ All stabilizers commute with each other")
     
-    # Check 2: All logical operators commute with all stabilizers
-    print("Checking that logical operators commute with stabilizers...")
+    # Check 2: Logical-Stabilizer Commutation - All logical operators commute with all stabilizers
+    print("Checking logical-stabilizer commutation...")
     for i, x_op in enumerate(x_log_ops):
         for j, stab_op in enumerate(stab_ops):
             anti_commutes = pauliops_anti_commute(x_op, stab_op)
@@ -125,7 +124,48 @@ def verify_logical_operators(block: ColorCode832):
             )
     print("✓ All logical operators commute with all stabilizers")
     
-    print("✓ All pre-checks passed! The code structure is mathematically valid.")
+    # Check 3: Logical-Logical Commutation
+    print("Checking logical-logical commutation relations...")
+    
+    # 3a: X_L^(i) and Z_L^(j) anti-commute if and only if i == j
+    for i, x_op in enumerate(x_log_ops):
+        for j, z_op in enumerate(z_log_ops):
+            anti_commutes = pauliops_anti_commute(x_op, z_op)
+            if i == j:
+                assert anti_commutes, (
+                    f"Logical X operator {i} and Logical Z operator {j} "
+                    f"should anti-commute (i == j), but they commute."
+                )
+            else:
+                assert not anti_commutes, (
+                    f"Logical X operator {i} and Logical Z operator {j} "
+                    f"should commute (i != j), but they anti-commute."
+                )
+    print("✓ X_L^(i) and Z_L^(j) anti-commute if and only if i == j")
+    
+    # 3b: X_L operators commute with each other
+    for i, x_op1 in enumerate(x_log_ops):
+        for j, x_op2 in enumerate(x_log_ops):
+            if i < j:  # Only check each pair once
+                anti_commutes = pauliops_anti_commute(x_op1, x_op2)
+                assert not anti_commutes, (
+                    f"Logical X operator {i} and Logical X operator {j} "
+                    f"should commute, but they anti-commute."
+                )
+    print("✓ All X_L operators commute with each other")
+    
+    # 3c: Z_L operators commute with each other
+    for i, z_op1 in enumerate(z_log_ops):
+        for j, z_op2 in enumerate(z_log_ops):
+            if i < j:  # Only check each pair once
+                anti_commutes = pauliops_anti_commute(z_op1, z_op2)
+                assert not anti_commutes, (
+                    f"Logical Z operator {i} and Logical Z operator {j} "
+                    f"should commute, but they anti-commute."
+                )
+    print("✓ All Z_L operators commute with each other")
+    
+    print("✓ All validations passed! The code structure is mathematically valid.")
     print("-" * 70)
 
 
@@ -181,8 +221,8 @@ def run_memory_experiment():
     print(f"Number of logical qubits: {len(block.logical_x_operators)}")
     print(f"Number of stabilizers: {len(block.stabilizers)}")
     
-    # Pre-check: Verify logical operators before running experiments
-    verify_logical_operators(block)
+    # Validation: Verify all operator commutation relations before running experiments
+    validate_operators(block)
     
     # Test 1: Initialize in logical |0⟩⊗3 and measure in Z basis
     print("\n" + "-" * 70)
